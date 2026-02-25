@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 const AUTO_STEP_DELAY_MS = 260;
 const FLIP_DURATION_S = 0.56;
+const AFTERCARE_HUG_SECONDS = 120;
 const RANDOM_NAMES = ["Alex", "Mia", "Kai", "Nora", "Eve", "Lio", "Rey", "Sia"];
 
 const createTask = (id, title, duration, intensity, notes = "") => ({
@@ -139,6 +140,13 @@ const formatDurationLabel = (seconds) => {
   return `${remainSeconds}秒`;
 };
 
+const intensityTextMap = {
+  light: "清水",
+  intimate: "亲密",
+  playful: "调皮",
+  solo: "单人",
+};
+
 const createInitialGameState = () => ({
   screen: "gate",
   consentChecked: false,
@@ -158,10 +166,16 @@ const createInitialGameState = () => ({
     running: false,
     elapsedMs: 0,
   },
+  aftercare: {
+    remainingSec: AFTERCARE_HUG_SECONDS,
+    running: false,
+    finished: false,
+  },
 });
 
-function DrawCard({ task, index, isFlipped, isGlowing, disabled, reducedMotion, onReveal }) {
+function DrawCard({ task, index, cardNumber, isFlipped, isGlowing, disabled, reducedMotion, onReveal }) {
   const durationLabel = formatDurationLabel(task.durationSec);
+  const intensityText = intensityTextMap[task.intensity] || "任务";
 
   return (
     <motion.button
@@ -185,10 +199,13 @@ function DrawCard({ task, index, isFlipped, isGlowing, disabled, reducedMotion, 
         }}
       >
         <span className="draw-card-face draw-card-front">
+          <span className="draw-card-front-badge">TASK {cardNumber}</span>
           <span className="draw-card-front-label">点击翻牌</span>
+          <span className="draw-card-front-cue">REVEAL</span>
         </span>
         <span className="draw-card-face draw-card-back">
           <span className="draw-card-duration">{durationLabel}</span>
+          <span className="draw-card-intensity">{intensityText}</span>
           <span className="draw-card-title">{task.title}</span>
         </span>
       </motion.span>
@@ -199,8 +216,102 @@ function DrawCard({ task, index, isFlipped, isGlowing, disabled, reducedMotion, 
 export default function App() {
   const reduceMotion = useReducedMotion();
   const [game, setGame] = useState(createInitialGameState);
+  const [soundEnabled, setSoundEnabled] = useState(true);
   const setupStepTimerRef = useRef(null);
   const revealTimerRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const audioMasterRef = useRef(null);
+  const aftercarePrevRef = useRef({
+    remainingSec: AFTERCARE_HUG_SECONDS,
+    finished: false,
+  });
+
+  const ensureAudioReady = useCallback(async () => {
+    if (typeof window === "undefined") return null;
+    const AudioContextRef = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextRef) return null;
+
+    if (!audioCtxRef.current) {
+      const ctx = new AudioContextRef();
+      const master = ctx.createGain();
+      master.gain.value = 0.16;
+      master.connect(ctx.destination);
+      audioCtxRef.current = ctx;
+      audioMasterRef.current = master;
+    }
+
+    if (audioCtxRef.current.state === "suspended") {
+      try {
+        await audioCtxRef.current.resume();
+      } catch {
+        return null;
+      }
+    }
+
+    return audioCtxRef.current;
+  }, []);
+
+  const playUiSound = useCallback(
+    async (kind) => {
+      if (!soundEnabled) return;
+      const ctx = await ensureAudioReady();
+      if (!ctx || !audioMasterRef.current) return;
+
+      const scheduleTone = (frequency, offsetSec, durationSec = 0.1, type = "sine", volume = 0.42) => {
+        const now = ctx.currentTime + offsetSec;
+        const oscillator = ctx.createOscillator();
+        const gain = ctx.createGain();
+        oscillator.type = type;
+        oscillator.frequency.setValueAtTime(frequency, now);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(volume, now + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + durationSec);
+        oscillator.connect(gain);
+        gain.connect(audioMasterRef.current);
+        oscillator.start(now);
+        oscillator.stop(now + durationSec + 0.01);
+      };
+
+      switch (kind) {
+        case "select":
+          scheduleTone(540, 0, 0.08, "triangle", 0.28);
+          break;
+        case "flip":
+          scheduleTone(620, 0, 0.11, "triangle", 0.28);
+          scheduleTone(760, 0.08, 0.12, "triangle", 0.24);
+          break;
+        case "modal-open":
+          scheduleTone(740, 0, 0.1, "sine", 0.26);
+          scheduleTone(980, 0.1, 0.15, "sine", 0.22);
+          break;
+        case "timer-start":
+          scheduleTone(520, 0, 0.09, "square", 0.22);
+          scheduleTone(680, 0.08, 0.12, "square", 0.2);
+          break;
+        case "timer-stop":
+          scheduleTone(760, 0, 0.09, "sine", 0.2);
+          scheduleTone(560, 0.09, 0.16, "sine", 0.2);
+          break;
+        case "aftercare-start":
+          scheduleTone(420, 0, 0.11, "sine", 0.24);
+          scheduleTone(560, 0.1, 0.14, "sine", 0.24);
+          scheduleTone(700, 0.24, 0.16, "sine", 0.2);
+          break;
+        case "aftercare-tick":
+          scheduleTone(840, 0, 0.045, "triangle", 0.14);
+          break;
+        case "aftercare-done":
+          scheduleTone(520, 0, 0.12, "triangle", 0.28);
+          scheduleTone(700, 0.12, 0.12, "triangle", 0.24);
+          scheduleTone(880, 0.24, 0.16, "triangle", 0.22);
+          break;
+        default:
+          scheduleTone(640, 0, 0.07, "triangle", 0.2);
+          break;
+      }
+    },
+    [ensureAudioReady, soundEnabled]
+  );
 
   const currentPlayer = useMemo(
     () => getCurrentPlayerName(game.mode, game.turnMode, game.round, game.players),
@@ -245,6 +356,7 @@ export default function App() {
 
   const handleDrawCardReveal = useCallback(
     (taskId) => {
+      void playUiSound("flip");
       setGame((prev) => {
         if (prev.modal.open || prev.isRevealingCard || prev.revealedTaskId) return prev;
         return {
@@ -265,6 +377,7 @@ export default function App() {
           if (!task) {
             return { ...prev, isRevealingCard: false, revealedTaskId: null };
           }
+          void playUiSound("modal-open");
           return {
             ...prev,
             isRevealingCard: false,
@@ -278,13 +391,16 @@ export default function App() {
         });
       }, waitMs);
     },
-    [reduceMotion]
+    [playUiSound, reduceMotion]
   );
 
   useEffect(() => {
     return () => {
       if (setupStepTimerRef.current) window.clearTimeout(setupStepTimerRef.current);
       if (revealTimerRef.current) window.clearTimeout(revealTimerRef.current);
+      if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+        audioCtxRef.current.close().catch(() => {});
+      }
     };
   }, []);
 
@@ -306,6 +422,46 @@ export default function App() {
 
     return () => window.clearInterval(timer);
   }, [game.modal.open, game.modal.running]);
+
+  useEffect(() => {
+    if (game.screen !== "aftercare" || !game.aftercare.running || game.aftercare.finished) return undefined;
+
+    const timer = window.setInterval(() => {
+      setGame((prev) => {
+        if (prev.screen !== "aftercare" || !prev.aftercare.running || prev.aftercare.finished) return prev;
+        const nextSec = Math.max(0, prev.aftercare.remainingSec - 1);
+        const isDone = nextSec === 0;
+        return {
+          ...prev,
+          aftercare: {
+            ...prev.aftercare,
+            remainingSec: nextSec,
+            running: isDone ? false : prev.aftercare.running,
+            finished: isDone,
+          },
+        };
+      });
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [game.aftercare.finished, game.aftercare.running, game.screen]);
+
+  useEffect(() => {
+    const prev = aftercarePrevRef.current;
+    if (game.screen === "aftercare") {
+      const remainingChanged = game.aftercare.remainingSec !== prev.remainingSec;
+      if (game.aftercare.running && remainingChanged && game.aftercare.remainingSec > 0 && game.aftercare.remainingSec <= 10) {
+        void playUiSound("aftercare-tick");
+      }
+      if (!prev.finished && game.aftercare.finished) {
+        void playUiSound("aftercare-done");
+      }
+    }
+    aftercarePrevRef.current = {
+      remainingSec: game.aftercare.remainingSec,
+      finished: game.aftercare.finished,
+    };
+  }, [game.aftercare.finished, game.aftercare.remainingSec, game.aftercare.running, game.screen, playUiSound]);
 
   useEffect(() => {
     const renderGameToText = () => {
@@ -340,6 +496,11 @@ export default function App() {
           task: game.modal.task ? game.modal.task.title : null,
           elapsedMs: game.modal.elapsedMs,
         },
+        aftercare: {
+          remainingSec: game.aftercare.remainingSec,
+          running: game.aftercare.running,
+          finished: game.aftercare.finished,
+        },
       });
     };
 
@@ -348,14 +509,39 @@ export default function App() {
       const steps = Math.max(1, Math.round(ms / 100));
       const deltaMs = steps * 100;
       setGame((prev) => {
-        if (!prev.modal.open || !prev.modal.running) return prev;
-        return {
-          ...prev,
-          modal: {
-            ...prev.modal,
-            elapsedMs: prev.modal.elapsedMs + deltaMs,
-          },
-        };
+        const shouldAdvanceModal = prev.modal.open && prev.modal.running;
+        const shouldAdvanceAftercare = prev.screen === "aftercare" && prev.aftercare.running && !prev.aftercare.finished;
+        if (!shouldAdvanceModal && !shouldAdvanceAftercare) return prev;
+
+        let next = prev;
+        if (shouldAdvanceModal) {
+          next = {
+            ...next,
+            modal: {
+              ...next.modal,
+              elapsedMs: next.modal.elapsedMs + deltaMs,
+            },
+          };
+        }
+
+        if (shouldAdvanceAftercare) {
+          const deltaSec = Math.floor(deltaMs / 1000);
+          if (deltaSec > 0) {
+            const nextRemaining = Math.max(0, next.aftercare.remainingSec - deltaSec);
+            const done = nextRemaining === 0;
+            next = {
+              ...next,
+              aftercare: {
+                ...next.aftercare,
+                remainingSec: nextRemaining,
+                running: done ? false : next.aftercare.running,
+                finished: done,
+              },
+            };
+          }
+        }
+
+        return next;
       });
     };
 
@@ -366,6 +552,7 @@ export default function App() {
   }, [game, currentPlayer]);
 
   const startGame = () => {
+    void playUiSound("select");
     setGame((prev) => {
       if (!prev.mode) return prev;
       if (prev.mode === "duo" && (!prev.intensity || !prev.turnMode)) return prev;
@@ -389,6 +576,7 @@ export default function App() {
   };
 
   const closeTaskAndAdvance = () => {
+    void playUiSound("timer-stop");
     setGame((prev) => {
       const doneTask = prev.modal.task;
       const nextLastTaskIds = [...prev.lastTaskIds];
@@ -419,6 +607,7 @@ export default function App() {
   };
 
   const closeTaskAndResetDraw = () => {
+    void playUiSound("select");
     setGame((prev) => {
       const next = {
         ...prev,
@@ -436,7 +625,27 @@ export default function App() {
     });
   };
 
+  const enterAftercare = useCallback(() => {
+    void playUiSound("aftercare-start");
+    setGame((prev) => ({
+      ...prev,
+      screen: "aftercare",
+      modal: {
+        open: false,
+        task: null,
+        running: false,
+        elapsedMs: 0,
+      },
+      aftercare: {
+        remainingSec: AFTERCARE_HUG_SECONDS,
+        running: true,
+        finished: false,
+      },
+    }));
+  }, [playUiSound]);
+
   const resetToGate = () => {
+    void playUiSound("select");
     setGame(createInitialGameState());
   };
 
@@ -446,48 +655,60 @@ export default function App() {
         <motion.section
           key="gate"
           id="screen-gate"
-          className="screen"
+          className="screen gate-screen"
           initial={reduceMotion ? false : { opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
           exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -10 }}
           transition={{ duration: 0.3, ease: "easeOut" }}
         >
-          <p className="tag">18+ · CONSENT FIRST</p>
-          <h1 className="title">Bed Game</h1>
-          <p className="subtle">更亲密，也更尊重边界。</p>
-          <div className="hero-card">
-            <p className="hero-text">关键词</p>
-            <p className="hero-text">暧昧 · 挑战 · 心跳</p>
+          <div className="gate-top">
+            <p className="tag">18+ · CONSENT FIRST</p>
+            <h1 className="title">Bed Game</h1>
+            <p className="subtle">更亲密，也更尊重边界。</p>
+            <div className="gate-chip-row">
+              <span className="info-chip">沉浸式任务流</span>
+              <span className="info-chip">动态计时</span>
+              <span className="info-chip">Aftercare 收尾</span>
+            </div>
           </div>
-          <div className="rule-card">
-            <p>- 任意时刻可叫停</p>
-            <p>- 每人每局可跳过 1 次</p>
-            <p>- 超出边界的任务自动过滤</p>
+          <div className="gate-main">
+            <div className="hero-card">
+              <p className="hero-text">关键词</p>
+              <p className="hero-text">暧昧 · 挑战 · 心跳</p>
+            </div>
+            <div className="rule-card">
+              <p>- 任意时刻可叫停</p>
+              <p>- 每人每局可跳过 1 次</p>
+              <p>- 超出边界的任务自动过滤</p>
+            </div>
           </div>
-          <label className="consent-row">
-            <input
-              id="consent-check"
-              type="checkbox"
-              checked={game.consentChecked || false}
-              onChange={(event) => {
-                const checked = event.target.checked;
-                setGame((prev) => ({ ...prev, consentChecked: checked }));
+          <div className="gate-actions">
+            <label className="consent-row">
+              <input
+                id="consent-checkbox"
+                type="checkbox"
+                checked={game.consentChecked || false}
+                onChange={(event) => {
+                  const checked = event.target.checked;
+                  setGame((prev) => ({ ...prev, consentChecked: checked }));
+                }}
+              />
+              <span>我已同意规则并确认成年</span>
+            </label>
+            <motion.button
+              id="start-btn"
+              className="neon-side-btn"
+              disabled={!game.consentChecked}
+              whileHover={game.consentChecked && !reduceMotion ? { y: -1, scale: 1.01 } : undefined}
+              whileTap={game.consentChecked && !reduceMotion ? { scale: 0.99 } : undefined}
+              onClick={() => {
+                void playUiSound("select");
+                setGame((prev) => ({ ...prev, screen: "setup", setupStep: 0 }));
               }}
-            />
-            <span>我已同意规则并确认成年</span>
-          </label>
-          <motion.button
-            id="start-flow-btn"
-            className="neon-side-btn"
-            disabled={!game.consentChecked}
-            whileHover={game.consentChecked && !reduceMotion ? { y: -1, scale: 1.01 } : undefined}
-            whileTap={game.consentChecked && !reduceMotion ? { scale: 0.99 } : undefined}
-            onClick={() => {
-              setGame((prev) => ({ ...prev, screen: "setup", setupStep: 0 }));
-            }}
-          >
-            开始
-          </motion.button>
+            >
+              开始
+            </motion.button>
+          </div>
         </motion.section>
       );
     }
@@ -497,7 +718,7 @@ export default function App() {
         <motion.section
           key="setup"
           id="screen-setup"
-          className="screen"
+          className="screen setup-screen"
           initial={reduceMotion ? false : { opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
           exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -10 }}
@@ -525,6 +746,7 @@ export default function App() {
                   data-action="select-mode"
                   data-value="duo"
                   onClick={() => {
+                    void playUiSound("select");
                     setGame((prev) => ({
                       ...prev,
                       mode: "duo",
@@ -541,6 +763,7 @@ export default function App() {
                   data-action="select-mode"
                   data-value="solo"
                   onClick={() => {
+                    void playUiSound("select");
                     setGame((prev) => ({
                       ...prev,
                       mode: "solo",
@@ -562,6 +785,7 @@ export default function App() {
                   data-action="select-intensity"
                   data-value="light"
                   onClick={() => {
+                    void playUiSound("select");
                     setGame((prev) => ({ ...prev, intensity: "light" }));
                     scheduleSetupStep(2);
                   }}
@@ -573,6 +797,7 @@ export default function App() {
                   data-action="select-intensity"
                   data-value="intimate"
                   onClick={() => {
+                    void playUiSound("select");
                     setGame((prev) => ({ ...prev, intensity: "intimate" }));
                     scheduleSetupStep(2);
                   }}
@@ -584,6 +809,7 @@ export default function App() {
                   data-action="select-intensity"
                   data-value="playful"
                   onClick={() => {
+                    void playUiSound("select");
                     setGame((prev) => ({ ...prev, intensity: "playful" }));
                     scheduleSetupStep(2);
                   }}
@@ -595,6 +821,7 @@ export default function App() {
                   data-action="select-intensity"
                   data-value="random"
                   onClick={() => {
+                    void playUiSound("select");
                     setGame((prev) => ({ ...prev, intensity: "random" }));
                     scheduleSetupStep(2);
                   }}
@@ -611,6 +838,7 @@ export default function App() {
                   data-action="select-turn"
                   data-value="alternate"
                   onClick={() => {
+                    void playUiSound("select");
                     setGame((prev) => ({ ...prev, turnMode: "alternate" }));
                     scheduleSetupStep(3);
                   }}
@@ -622,6 +850,7 @@ export default function App() {
                   data-action="select-turn"
                   data-value="startA"
                   onClick={() => {
+                    void playUiSound("select");
                     setGame((prev) => ({ ...prev, turnMode: "startA" }));
                     scheduleSetupStep(3);
                   }}
@@ -633,6 +862,7 @@ export default function App() {
                   data-action="select-turn"
                   data-value="startB"
                   onClick={() => {
+                    void playUiSound("select");
                     setGame((prev) => ({ ...prev, turnMode: "startB" }));
                     scheduleSetupStep(3);
                   }}
@@ -663,6 +893,7 @@ export default function App() {
                       data-target="a"
                       type="button"
                       onClick={() => {
+                        void playUiSound("select");
                         const picked = RANDOM_NAMES[Math.floor(Math.random() * RANDOM_NAMES.length)];
                         setGame((prev) => ({ ...prev, players: { ...prev.players, a: picked } }));
                       }}
@@ -688,6 +919,7 @@ export default function App() {
                       data-target="b"
                       type="button"
                       onClick={() => {
+                        void playUiSound("select");
                         const picked = RANDOM_NAMES[Math.floor(Math.random() * RANDOM_NAMES.length)];
                         setGame((prev) => ({ ...prev, players: { ...prev.players, b: picked } }));
                       }}
@@ -699,6 +931,13 @@ export default function App() {
                 <p id="setup-summary" className="hint">
                   {setupSummary}
                 </p>
+                <div className="setup-preview-card">
+                  <p className="setup-preview-tag">已准备就绪</p>
+                  <p className="setup-preview-title">
+                    {game.mode === "duo" ? `${game.players.a} × ${game.players.b}` : game.players.a}
+                  </p>
+                  <p className="setup-preview-desc">确认后进入抽卡界面，抽到的任务会显示明确限时。</p>
+                </div>
                 <motion.button
                   id="go-game-btn"
                   className="neon-side-btn"
@@ -720,15 +959,18 @@ export default function App() {
         <motion.section
           key="draw"
           id="screen-draw"
-          className="screen"
+          className="screen draw-screen"
           initial={reduceMotion ? false : { opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
           exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -10 }}
           transition={{ duration: 0.3, ease: "easeOut" }}
         >
-          <p id="round-indicator" className="tag">
-            回合 {String(game.round).padStart(2, "0")} · 当前玩家 {currentPlayer}
-          </p>
+          <div className="draw-topbar">
+            <p id="round-indicator" className="tag draw-round-pill">
+              回合 {String(game.round).padStart(2, "0")} · 当前玩家 {currentPlayer}
+            </p>
+            <p className="draw-cooldown-pill">冷却池 {game.lastTaskIds.length}/2</p>
+          </div>
           <div className="draw-panel">
             <h2>抽一张任务卡</h2>
             <p className="subtle">点选一张卡后，弹出任务窗口</p>
@@ -744,6 +986,7 @@ export default function App() {
                     key={task.id}
                     task={task}
                     index={index}
+                    cardNumber={index + 1}
                     isFlipped={isFlipped}
                     isGlowing={isGlowing}
                     disabled={disabled}
@@ -761,6 +1004,7 @@ export default function App() {
             whileHover={!reduceMotion ? { y: -1, scale: 1.01 } : undefined}
             whileTap={!reduceMotion ? { scale: 0.99 } : undefined}
             onClick={() => {
+              void playUiSound("select");
               setGame((prev) => {
                 if (prev.modal.open) return prev;
                 const next = {
@@ -779,18 +1023,7 @@ export default function App() {
             id="end-game-btn"
             className="ghost-btn"
             type="button"
-            onClick={() => {
-              setGame((prev) => ({
-                ...prev,
-                screen: "aftercare",
-                modal: {
-                  open: false,
-                  task: null,
-                  running: false,
-                  elapsedMs: 0,
-                },
-              }));
-            }}
+            onClick={enterAftercare}
           >
             结束游戏 → 自动进入 Aftercare
           </button>
@@ -802,7 +1035,7 @@ export default function App() {
       <motion.section
         key="aftercare"
         id="screen-aftercare"
-        className="screen"
+        className="screen aftercare-screen"
         initial={reduceMotion ? false : { opacity: 0, y: 14 }}
         animate={{ opacity: 1, y: 0 }}
         exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -10 }}
@@ -811,12 +1044,61 @@ export default function App() {
         <p className="tag">Aftercare</p>
         <h2>慢下来，确认彼此都舒适。</h2>
         <div className="rule-card">
-          <p id="aftercare-q1">{game.players.a}：刚才最喜欢的瞬间是什么？</p>
-          <p id="aftercare-q2">{game.players.b}：有没有需要下次调整的边界？</p>
+          <p id="aftercare-q1" className="aftercare-q">
+            {game.players.a}：刚才最喜欢的瞬间是什么？
+          </p>
+          <p id="aftercare-q2" className="aftercare-q">
+            {game.players.b}：有没有需要下次调整的边界？
+          </p>
         </div>
-        <div className="hero-card">
+        <div className="hero-card aftercare-timer-card">
           <p className="hero-text">拥抱倒计时</p>
-          <p className="hero-text">02:00</p>
+          <p id="aftercare-hug-timer" className={`hero-text aftercare-hug-timer${game.aftercare.finished ? " is-finished" : ""}`}>
+            {formatMs(game.aftercare.remainingSec * 1000)}
+          </p>
+          <p className="subtle aftercare-status">
+            {game.aftercare.finished ? "倒计时完成，记得拥抱结束后说说感受。" : game.aftercare.running ? "倒计时进行中…" : "倒计时已暂停"}
+          </p>
+          <div className="aftercare-actions">
+            <button
+              id="aftercare-toggle-btn"
+              type="button"
+              className="mini-action-btn"
+              onClick={() => {
+                void playUiSound("select");
+                setGame((prev) => {
+                  if (prev.screen !== "aftercare" || prev.aftercare.finished) return prev;
+                  return {
+                    ...prev,
+                    aftercare: {
+                      ...prev.aftercare,
+                      running: !prev.aftercare.running,
+                    },
+                  };
+                });
+              }}
+            >
+              {game.aftercare.running ? "暂停" : "继续"}
+            </button>
+            <button
+              id="aftercare-reset-btn"
+              type="button"
+              className="mini-action-btn ghost"
+              onClick={() => {
+                void playUiSound("aftercare-start");
+                setGame((prev) => ({
+                  ...prev,
+                  aftercare: {
+                    remainingSec: AFTERCARE_HUG_SECONDS,
+                    running: true,
+                    finished: false,
+                  },
+                }));
+              }}
+            >
+              重置 2:00
+            </button>
+          </div>
         </div>
         <motion.button
           id="play-again-btn"
@@ -864,6 +1146,17 @@ export default function App() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45, ease: "easeOut" }}
       >
+        <button
+          id="sound-toggle-btn"
+          type="button"
+          className={`sound-toggle${soundEnabled ? "" : " muted"}`}
+          onClick={() => {
+            setSoundEnabled((prev) => !prev);
+          }}
+        >
+          {soundEnabled ? "音效 开" : "音效 关"}
+        </button>
+
         <AnimatePresence mode="wait">{renderScreen()}</AnimatePresence>
 
         <AnimatePresence>
@@ -896,6 +1189,7 @@ export default function App() {
                     whileHover={!reduceMotion ? { y: -1, scale: 1.01 } : undefined}
                     whileTap={!reduceMotion ? { scale: 0.99 } : undefined}
                     onClick={() => {
+                      void playUiSound("timer-start");
                       setGame((prev) => {
                         if (!prev.modal.open || !prev.modal.task || prev.modal.running) return prev;
                         return {
