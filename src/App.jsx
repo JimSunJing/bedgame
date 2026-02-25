@@ -140,6 +140,11 @@ const formatDurationLabel = (seconds) => {
   return `${remainSeconds}秒`;
 };
 
+const normalizePlayerName = (value, fallback) => {
+  const trimmed = String(value ?? "").trim();
+  return trimmed || fallback;
+};
+
 const intensityTextMap = {
   light: "清水",
   intimate: "亲密",
@@ -221,6 +226,10 @@ export default function App() {
   const revealTimerRef = useRef(null);
   const audioCtxRef = useRef(null);
   const audioMasterRef = useRef(null);
+  const modalTimerPrevRef = useRef({
+    taskId: null,
+    elapsedMs: 0,
+  });
   const aftercarePrevRef = useRef({
     remainingSec: AFTERCARE_HUG_SECONDS,
     finished: false,
@@ -292,6 +301,11 @@ export default function App() {
           scheduleTone(760, 0, 0.09, "sine", 0.2);
           scheduleTone(560, 0.09, 0.16, "sine", 0.2);
           break;
+        case "timer-target":
+          scheduleTone(980, 0, 0.08, "triangle", 0.24);
+          scheduleTone(1240, 0.09, 0.08, "triangle", 0.22);
+          scheduleTone(980, 0.18, 0.14, "triangle", 0.2);
+          break;
         case "aftercare-start":
           scheduleTone(420, 0, 0.11, "sine", 0.24);
           scheduleTone(560, 0.1, 0.14, "sine", 0.24);
@@ -301,9 +315,14 @@ export default function App() {
           scheduleTone(840, 0, 0.045, "triangle", 0.14);
           break;
         case "aftercare-done":
-          scheduleTone(520, 0, 0.12, "triangle", 0.28);
-          scheduleTone(700, 0.12, 0.12, "triangle", 0.24);
-          scheduleTone(880, 0.24, 0.16, "triangle", 0.22);
+          // Phone-alarm style: repeated two-tone phrase with gradual loudness increase.
+          for (let i = 0; i < 10; i += 1) {
+            const base = i * 0.36;
+            const level = 0.1 + i * 0.02;
+            scheduleTone(880, base, 0.14, "sine", level);
+            scheduleTone(1175, base + 0.16, 0.14, "sine", level * 0.92);
+            scheduleTone(880, base + 0.31, 0.11, "triangle", level * 0.82);
+          }
           break;
         default:
           scheduleTone(640, 0, 0.07, "triangle", 0.2);
@@ -317,6 +336,8 @@ export default function App() {
     () => getCurrentPlayerName(game.mode, game.turnMode, game.round, game.players),
     [game.mode, game.turnMode, game.round, game.players]
   );
+  const modalTargetMs = (game.modal.task?.durationSec ?? 0) * 1000;
+  const isModalTimerFinished = modalTargetMs > 0 && game.modal.elapsedMs >= modalTargetMs;
 
   const setupSummary = useMemo(() => {
     const modeMap = { duo: "双人", solo: "单人" };
@@ -353,6 +374,25 @@ export default function App() {
       lastTaskIds: prev.lastTaskIds,
     });
   }, []);
+
+  const handleSetupBack = useCallback(() => {
+    void playUiSound("select");
+    if (setupStepTimerRef.current) {
+      window.clearTimeout(setupStepTimerRef.current);
+      setupStepTimerRef.current = null;
+    }
+
+    setGame((prev) => {
+      if (prev.screen !== "setup") return prev;
+      if (prev.setupStep <= 0) return prev;
+
+      const targetStep = prev.mode === "solo" && prev.setupStep === 3 ? 0 : Math.max(0, prev.setupStep - 1);
+      return {
+        ...prev,
+        setupStep: targetStep,
+      };
+    });
+  }, [playUiSound]);
 
   const handleDrawCardReveal = useCallback(
     (taskId) => {
@@ -422,6 +462,30 @@ export default function App() {
 
     return () => window.clearInterval(timer);
   }, [game.modal.open, game.modal.running]);
+
+  useEffect(() => {
+    const prev = modalTimerPrevRef.current;
+    const taskId = game.modal.task?.id ?? null;
+    const targetMs = (game.modal.task?.durationSec ?? 0) * 1000;
+    const isSameTask = prev.taskId === taskId;
+    const prevElapsedMs = isSameTask ? prev.elapsedMs : 0;
+    const crossedTarget =
+      Boolean(taskId) &&
+      game.modal.open &&
+      game.modal.running &&
+      targetMs > 0 &&
+      prevElapsedMs < targetMs &&
+      game.modal.elapsedMs >= targetMs;
+
+    if (crossedTarget) {
+      void playUiSound("timer-target");
+    }
+
+    modalTimerPrevRef.current = {
+      taskId,
+      elapsedMs: game.modal.elapsedMs,
+    };
+  }, [game.modal.elapsedMs, game.modal.open, game.modal.running, game.modal.task, playUiSound]);
 
   useEffect(() => {
     if (game.screen !== "aftercare" || !game.aftercare.running || game.aftercare.finished) return undefined;
@@ -556,8 +620,13 @@ export default function App() {
     setGame((prev) => {
       if (!prev.mode) return prev;
       if (prev.mode === "duo" && (!prev.intensity || !prev.turnMode)) return prev;
+      const normalizedPlayers = {
+        a: normalizePlayerName(prev.players.a, "Alex"),
+        b: normalizePlayerName(prev.players.b, "Mia"),
+      };
       const next = {
         ...prev,
+        players: normalizedPlayers,
         screen: "draw",
         round: 1,
         lastTaskIds: [],
@@ -726,9 +795,20 @@ export default function App() {
         >
           <div className="setup-header">
             <p className="tag">快速配置</p>
-            <p id="setup-step-text" className="subtle">
-              选项 {game.setupStep + 1}/4
-            </p>
+            <div className="setup-header-meta">
+              <button
+                id="setup-back-btn"
+                type="button"
+                className="setup-back-btn"
+                onClick={handleSetupBack}
+                disabled={game.setupStep <= 0}
+              >
+                上一步
+              </button>
+              <p id="setup-step-text" className="subtle">
+                选项 {game.setupStep + 1}/4
+              </p>
+            </div>
           </div>
 
           <div className="progress-dots">
@@ -873,18 +953,18 @@ export default function App() {
               </article>
 
               <article className="setup-step">
-                <h2>怎么称呼彼此？</h2>
+                <h2>{game.mode === "solo" ? "怎么称呼自己？" : "怎么称呼彼此？"}</h2>
                 <div className="name-editor">
                   <div className="name-row">
-                    <span>A</span>
+                    <span>{game.mode === "solo" ? "你" : "A"}</span>
                     <input
                       id="name-a"
                       type="text"
                       maxLength={16}
                       value={game.players.a}
                       onChange={(event) => {
-                        const value = event.target.value.trim();
-                        setGame((prev) => ({ ...prev, players: { ...prev.players, a: value || "Alex" } }));
+                        const value = event.target.value;
+                        setGame((prev) => ({ ...prev, players: { ...prev.players, a: value } }));
                       }}
                     />
                     <button
@@ -901,32 +981,34 @@ export default function App() {
                       随机
                     </button>
                   </div>
-                  <div className="name-row">
-                    <span>B</span>
-                    <input
-                      id="name-b"
-                      type="text"
-                      maxLength={16}
-                      value={game.players.b}
-                      onChange={(event) => {
-                        const value = event.target.value.trim();
-                        setGame((prev) => ({ ...prev, players: { ...prev.players, b: value || "Mia" } }));
-                      }}
-                    />
-                    <button
-                      className="tiny-random"
-                      data-action="random-name"
-                      data-target="b"
-                      type="button"
-                      onClick={() => {
-                        void playUiSound("select");
-                        const picked = RANDOM_NAMES[Math.floor(Math.random() * RANDOM_NAMES.length)];
-                        setGame((prev) => ({ ...prev, players: { ...prev.players, b: picked } }));
-                      }}
-                    >
-                      随机
-                    </button>
-                  </div>
+                  {game.mode !== "solo" ? (
+                    <div className="name-row">
+                      <span>B</span>
+                      <input
+                        id="name-b"
+                        type="text"
+                        maxLength={16}
+                        value={game.players.b}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setGame((prev) => ({ ...prev, players: { ...prev.players, b: value } }));
+                        }}
+                      />
+                      <button
+                        className="tiny-random"
+                        data-action="random-name"
+                        data-target="b"
+                        type="button"
+                        onClick={() => {
+                          void playUiSound("select");
+                          const picked = RANDOM_NAMES[Math.floor(Math.random() * RANDOM_NAMES.length)];
+                          setGame((prev) => ({ ...prev, players: { ...prev.players, b: picked } }));
+                        }}
+                      >
+                        随机
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
                 <p id="setup-summary" className="hint">
                   {setupSummary}
@@ -969,11 +1051,17 @@ export default function App() {
             <p id="round-indicator" className="tag draw-round-pill">
               回合 {String(game.round).padStart(2, "0")} · 当前玩家 {currentPlayer}
             </p>
-            <p className="draw-cooldown-pill">冷却池 {game.lastTaskIds.length}/2</p>
+            <p
+              className="draw-cooldown-pill"
+              title="最近完成的任务会进入冷却池（最多 2 个），避免连续抽到重复任务。"
+            >
+              防重复冷却 {game.lastTaskIds.length}/2
+            </p>
           </div>
           <div className="draw-panel">
             <h2>抽一张任务卡</h2>
             <p className="subtle">点选一张卡后，弹出任务窗口</p>
+            <p className="draw-cooldown-note">冷却池说明：最近完成的任务（最多 2 个）不会立刻重复抽到。</p>
             <div id="draw-cards" className="draw-cards">
               {game.currentDrawCards.map((task, index) => {
                 const isFlipped = game.revealedTaskId === task.id;
@@ -1146,16 +1234,18 @@ export default function App() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45, ease: "easeOut" }}
       >
-        <button
-          id="sound-toggle-btn"
-          type="button"
-          className={`sound-toggle${soundEnabled ? "" : " muted"}`}
-          onClick={() => {
-            setSoundEnabled((prev) => !prev);
-          }}
-        >
-          {soundEnabled ? "音效 开" : "音效 关"}
-        </button>
+        <div className="app-toolbar">
+          <button
+            id="sound-toggle-btn"
+            type="button"
+            className={`sound-toggle${soundEnabled ? "" : " muted"}`}
+            onClick={() => {
+              setSoundEnabled((prev) => !prev);
+            }}
+          >
+            {soundEnabled ? "音效 开" : "音效 关"}
+          </button>
+        </div>
 
         <AnimatePresence mode="wait">{renderScreen()}</AnimatePresence>
 
@@ -1207,7 +1297,7 @@ export default function App() {
                   <div className="timer-card">
                     <motion.p
                       id="modal-timer"
-                      className={game.modal.running ? "timer-running" : ""}
+                      className={`${game.modal.running ? "timer-running" : ""}${isModalTimerFinished ? " timer-finished" : ""}`.trim()}
                       animate={
                         game.modal.running && !reduceMotion
                           ? { scale: [1, 1.04, 1] }

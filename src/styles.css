@@ -100,11 +100,14 @@ input {
   margin: 12px auto;
 }
 
+.app-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 8px;
+}
+
 .sound-toggle {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 7;
+  position: static;
   border: 1px solid #ff85bc66;
   background: #0d0914d6;
   color: #ffdeee;
@@ -328,6 +331,35 @@ h3 {
   align-items: baseline;
 }
 
+.setup-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.setup-back-btn {
+  border: 1px solid #ffffff2b;
+  background: #ffffff08;
+  color: #f3dde9;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.setup-back-btn:hover {
+  border-color: #ff7dbb7d;
+  box-shadow: 0 0 14px #ff5ca336;
+}
+
+.setup-back-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 .progress-dots {
   display: flex;
   gap: 8px;
@@ -547,6 +579,12 @@ h3 {
 .draw-panel h2 {
   margin: 0;
   font-size: clamp(36px, 4vw, 56px);
+}
+
+.draw-cooldown-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-faint);
 }
 
 .draw-cards {
@@ -853,6 +891,14 @@ h3 {
     0 0 28px #ff4f9e99;
 }
 
+#modal-timer.timer-finished {
+  color: #4dff9c;
+  text-shadow:
+    0 0 12px #4dff9ccc,
+    0 0 24px #4dff9ca6,
+    0 0 38px #4dff9c80;
+}
+
 .timer-card small {
   display: block;
   text-align: center;
@@ -949,8 +995,6 @@ h3 {
   }
 
   .sound-toggle {
-    top: 8px;
-    right: 8px;
     font-size: 11px;
     padding: 6px 10px;
   }
