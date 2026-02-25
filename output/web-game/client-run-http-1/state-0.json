@@ -1,0 +1,1 @@
+{"coordinateSystem":"UI flow state only (no spatial canvas)","screen":"gate","setupStep":0,"config":{"mode":null,"intensity":null,"turnMode":null,"players":{"a":"Alex","b":"Mia"}},"draw":{"round":1,"currentPlayer":"Alex","cards":[],"cooldown":[]},"modal":{"open":false,"running":false,"task":null,"elapsedMs":0}}

@@ -1,0 +1,6 @@
+{
+  "transform": "matrix(1, 0, 0, 1, -1129.01, 0)",
+  "width": "386px",
+  "children": 4,
+  "screen": "{\"coordinateSystem\":\"UI flow state only (no spatial canvas)\",\"screen\":\"setup\",\"setupStep\":3,\"config\":{\"mode\":\"duo\",\"intensity\":\"random\",\"turnMode\":\"startA\",\"players\":{\"a\":\"Alex\",\"b\":\"Mia\"}},\"draw\":{\"round\":1,\"currentPlayer\":\"Alex\",\"cards\":[],\"cooldown\":[]},\"modal\":{\"open\":false,\"running\":false,\"task\":null,\"elapsedMs\":0}}"
+}
